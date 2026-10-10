@@ -1,0 +1,27 @@
+{
+  "name": "advanced-devops-engineering",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "directories": {
+    "doc": "docs"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "prepare": "husky"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Donhadley-Multiflex-Ltd/advanced-devops-engineering.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/Donhadley-Multiflex-Ltd/advanced-devops-engineering/issues"
+  },
+  "homepage": "https://github.com/Donhadley-Multiflex-Ltd/advanced-devops-engineering#readme",
+  "devDependencies": {
+    "husky": "^9.1.7"
+  }
+}
