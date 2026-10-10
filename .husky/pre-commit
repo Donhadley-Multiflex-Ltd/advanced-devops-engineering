@@ -1,1 +1,2 @@
+# git commit -m "message" --no-verify
 npm test
