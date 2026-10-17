@@ -20,8 +20,6 @@ be developed, reviewed, and merged while maintaining main branch stability.
 | Documentation | Updates guides, READMEs, and other documentation. | Short-lived |
 | Maintenance | Updates tooling, dependencies, or repository configuration. | Short-lived |
 
-These types describe the purpose of the work. Under the proposed naming
-format below, a type prefix such as feature/ or docs/ is not required.
 
 A develop branch, release branches, and hotfix branches are not included
 in this initial proposal. The team can introduce them if needed.
