@@ -12,9 +12,9 @@ be developed, reviewed, and merged while maintaining main branch stability.
 
 ## Proposed Branch Types
 
-| Type | Purpose | Lifetime |
+| Type | Purpose | Lifecycle |
 | --- | --- | --- |
-| Main | Holds reviewed and integrated project changes. | Long-lived |
+| Main | Serves as the production branch, holding reviewed, stable code intended for production release. | Long-lived |
 | Feature | Develops new functionality or infrastructure capabilities. | Short-lived |
 | Bug fix | Corrects an identified defect. | Short-lived |
 | Documentation | Updates guides, READMEs, and other documentation. | Short-lived |
