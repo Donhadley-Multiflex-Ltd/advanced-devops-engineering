@@ -1,0 +1,58 @@
+# Feature Branching Strategy
+
+Imagine a company that delivers services to its customers through a
+customer-facing application. The primary goal of any organisation is to
+continuously deliver value to its end users. One of the most effective ways to
+achieve this is by introducing new features or enhancing existing
+functionality within a product.
+
+For a product or Minimum Viable Product (MVP) to remain competitive and
+relevant in the market, organisations must establish a reliable value stream
+that supports continuous improvement and innovation. This enables development
+teams to safely build, test, and release new functionality without disrupting
+the stability of the main application.
+
+A good example can be found in the gaming industry, where constant innovation
+is essential for maintaining player engagement. Imagine a development team
+working on FIFA 27 that decides to introduce an enhanced VAR (Video Assistant
+Referee) system while also improving player physics and physical attributes.
+These changes are developed as new features because they add value to the game
+and create a more immersive and realistic experience for players.
+
+Using a feature branching strategy allows developers to work on these
+enhancements in isolation from the main codebase. This ensures that new
+functionality can be developed, tested, and reviewed independently before
+being merged into the main branch, reducing risk and maintaining product
+quality.
+
+## Key Benefits of Feature Branching
+
+- Enables developers to work on new features independently.
+- Prevents unfinished code from affecting the production environment.
+- Supports code reviews and collaborative development.
+- Reduces the risk of introducing bugs into the main branch.
+- Facilitates continuous improvement and innovation.
+
+In essence, feature branching provides a controlled and efficient way for
+development teams to deliver new value to customers while maintaining the
+stability and reliability of the application.
+
+Once these new features have been reviewed and thoroughly tested without
+introducing regressions or breaking existing functionality, a Pull Request
+(PR) is opened for review by one or more senior developers before the changes
+are merged into the main branch.
+
+Additionally, using atomic commit messages improves traceability and provides
+the ability to roll back changes if issues or oversights are discovered later.
+
+Feature Branch Workflow
+
+Create Feature Branch
+    ->
+Write Logic
+    ->
+Test New 
+    ->
+Atomic commit (feature/var-integration: integrate VAR functionality for a more immersive player experience)
+    ->
+Push Changes -> Pull Request -> PR Review -> Merge Changes -> Clean up branch
