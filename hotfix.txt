@@ -1,0 +1,75 @@
+# Hotfix
+
+## Description
+
+Following the successful deployment of the new VAR feature, the application
+has been operating as expected, and users have been enjoying the enhanced
+gaming experience.
+
+However, a few hours after the release, reports begin to emerge from users
+across the Asia-Pacific (APAC) region. Players attempting to log in using
+their PlayStation accounts in order to live stream gameplay are receiving an
+"Authentication Error" despite entering valid credentials.
+
+The issue is not limited to standard user accounts. Users authenticated
+through Single Sign-On (SSO) are also experiencing the same problem. Since
+both authentication methods are failing, the initial investigation suggests a
+potential issue with the OAuth authentication service introduced during the
+recent deployment.
+
+This is considered a high-priority production incident because it directly
+impacts user access and prevents players from using a core feature of the
+application. As a result, the development team must immediately collaborate
+with the Security and Identity teams to identify the root cause and implement
+a hotfix.
+
+The purpose of this hotfix is to restore authentication services, minimise
+customer impact, and return the platform to a stable operational state as
+quickly as possible.
+
+## Hotfix Workflow
+
+Production Issue Detected
+    ->
+Incident Logged
+    ->
+Root Cause Analysis
+    ->
+Create Hotfix Branch from Main
+    ->
+Implement Fix
+    ->
+Security Validation
+    ->
+Test in Staging Environment
+    ->
+Commit Changes
+
+git commit -m "hotfix/oauth-authentication: resolve PlayStation login failure"
+
+    ->
+Push Changes
+    ->
+Open Pull Request
+    ->
+Senior Developer Review
+    ->
+Merge to Main
+    ->
+Deploy to Production
+    ->
+Monitor Application Health
+    ->
+Close Incident
+
+## Why a Hotfix Branch is Important
+
+A hotfix branch allows teams to quickly resolve critical production issues
+without waiting for ongoing feature development to be completed. By creating
+the branch directly from the main production branch, developers can isolate
+the fix, test it thoroughly, and deploy it safely while minimising risk to
+other areas of the application.
+
+This approach ensures that service is restored quickly, customer impact is
+reduced, and development teams can continue working on future features
+without interruption.
