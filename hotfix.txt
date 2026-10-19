@@ -1,0 +1,22 @@
+# Hotfix
+
+## Description
+
+Following the successful resolution of the OAuth authentication issue,
+login services have been fully restored for PlayStation users across all
+affected regions.
+
+As part of the hotfix validation process, the development team has extended
+testing to Xbox users and other supported console platforms to ensure the
+fix works consistently across the entire gaming ecosystem. Although the
+issue was initially reported by PlayStation users, cross-platform testing
+helps identify any hidden authentication dependencies and reduces the risk
+of similar incidents occurring in the future.
+
+By validating the hotfix across multiple console providers, the team can
+confirm that OAuth authentication, Single Sign-On (SSO), and live streaming
+integrations continue to function as expected for all users.
+
+This proactive approach improves platform reliability, strengthens
+authentication security, and helps prevent future authentication-related
+outages.
