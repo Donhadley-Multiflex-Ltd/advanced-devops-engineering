@@ -1,0 +1,32 @@
+# Configuration of Review Expectations Following Integration of PR Template.
+
+This document outlines the expectations for code reviews following the integration of the Pull Request (PR) template. The objective is to improve code quality, security, traceability, accountability, and compliance across the development process.
+
+# Review Checklist
+- Requirements have been fulfilled and validated.
+- No plaintext secrets, credentials, or sensitive information have been introduced into the codebase.
+- Documentation has been updated where applicable.
+- Associated Jira ticket has been referenced for purpose, traceability, audit, and compliance requirements.
+- CODEOWNERS file has been reviewed and updated where necessary to promote shared responsibility and accountability within the team.
+
+# Areas for Improvement
+
+As discussed, organisation-wide branch protection policy enforcement remains outstanding.
+
+- Recommended Controls
+- Prevent direct pushes to the main branch.
+- Require Pull Requests for all changes targeting main.
+- Require a minimum of one or two peer reviewers prior to merge.
+- Enforce successful completion of build and validation checks before merge approval.
+- Restrict self-approval of Pull Requests where feasible.
+- Enable auditability of code changes through mandatory reviewer approvals.
+
+# Expected Outcome
+
+Implementation of these controls will:
+
+- Reduce the risk of accidental changes being committed directly to the main branch.
+- Improve code quality through peer review.
+- Strengthen accountability and shared ownership of the codebase.
+- Support audit, compliance, and governance requirements.
+- Improve security by identifying potential issues before deployment.
