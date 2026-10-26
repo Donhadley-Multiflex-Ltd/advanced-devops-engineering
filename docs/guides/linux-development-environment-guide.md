@@ -1,6 +1,5 @@
-from pathlib import Path
+DEVOPS-006 — Provision Linux Development Environment
 
-content = r"""# DEVOPS-006 — Provision Linux Development Environment
 ## Student Implementation Guide
 
 **Epic:** Engineering Foundations & Linux  
