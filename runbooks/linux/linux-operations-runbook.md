@@ -995,3 +995,211 @@ This documentation ticket includes command examples, not proof that a production
 - **[DISK-4]** [Ubuntu/GNU head manual](https://manpages.ubuntu.com/manpages/noble/man1/head.1.html)
 - **[DISK-5]** [Ubuntu lsof manual: unlinked open files](https://manpages.ubuntu.com/manpages/noble/man8/lsof.8.html)
 - Local references for the inspected environment: `man df`, `man du`, `man sort`, `man head`, `man stat`, `man findmnt`, and `man lsof` where installed.
+
+## 16. DNS Problems
+
+### 16.1 Purpose, symptoms, and scope
+
+Investigate endpoints that fail to resolve, return unexpected addresses, or remain unreachable after resolution. Establish what the affected client actually resolves, which resolver answered, and whether the next failure is in DNS, transport, TLS, or the application.
+
+Examples assume Ubuntu/Linux with Bash, BIND `dig`/`nslookup`, `getent`, and `curl`. `resolvectl` examples apply where systemd-resolved is in use. Record missing tooling as a limitation and follow the team's tooling process; do not assume a missing command means DNS is broken.
+
+Run checks from the affected host, container, or equivalent client/network context. A laptop on another network or a host outside the application's container may use a different resolver. Record VPN state, network/interface, and deployment context. This investigation does not change DNS records, resolver configuration, caches, or service state.
+
+### 16.2 Step 1 — Capture client context and resolver configuration
+
+Record the exact failing hostname, URL/scheme/port, error text, UTC onset, client scope, and recent DNS/network/deployment changes. Obtain the expected DNS view and record/target from the service or DNS owner; do not infer the expected answer from memory.
+
+Use a hostname without a scheme, port, path, or final dot in the variable below. Replace the illustrative name before use:
+
+```bash
+DNS_NAME='app.example.com'
+umask 077
+DNS_EVIDENCE_DIR="$HOME/devops-evidence/DEVOPS-010-G/$(date -u +'%Y%m%dT%H%M%SZ')-$$"
+mkdir -p "$DNS_EVIDENCE_DIR"
+DNS_EVIDENCE_FILE="$DNS_EVIDENCE_DIR/dns-investigation.log"
+touch "$DNS_EVIDENCE_FILE"
+
+dns_check() {
+  local observed_rc
+  {
+    printf '\n[%s] COMMAND:' "$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+    printf ' %q' "$@"
+    printf '\n'
+    if "$@"; then
+      observed_rc=0
+    else
+      observed_rc=$?
+    fi
+    printf '[%s] COMMAND_EXIT_CODE=%s\n' \
+      "$(date -u +'%Y-%m-%dT%H:%M:%SZ')" "$observed_rc"
+  } 2>&1 | tee -a "$DNS_EVIDENCE_FILE"
+}
+
+dns_check hostname
+dns_check cat /etc/resolv.conf
+dns_check readlink -f /etc/resolv.conf
+dns_check cat /etc/nsswitch.conf
+dns_check cat /etc/hosts
+
+# If systemd-resolved is used:
+dns_check resolvectl status
+```
+
+The wrapper logs command results and continues after diagnostic failures; its own return status is not a remediation gate. Stop relying on local capture if file creation or logging fails. Protect raw output, including internal names/addresses, and share reviewed evidence.
+
+Inspect nameservers, search domains, and resolver options. A loopback entry such as `127.0.0.53` can be a legitimate local stub; it is not automatically a bad DNS server. Where available, `resolvectl status` shows upstream/per-link DNS and routing domains, including VPN-related choices. Do not overwrite a managed `/etc/resolv.conf` as an initial fix. [DNS-3]
+
+### 16.3 Step 2 — Query DNS records with dig
+
+Keep the full response initially so status, resolver, TTL, flags, and timings remain available:
+
+```bash
+dns_check dig +time=2 +tries=1 "${DNS_NAME}." A
+dns_check dig +time=2 +tries=1 "${DNS_NAME}." AAAA
+dns_check dig +time=2 +tries=1 "${DNS_NAME}." CNAME
+```
+
+The final dot makes the query name explicitly absolute. `A` requests IPv4, `AAAA` requests IPv6, and `CNAME` checks an alias. Inspect any alias chain and its final address records; absence of a CNAME is normal for a directly addressed name. Preserve the server and response metadata rather than relying only on `+short`. [DNS-1]
+
+| Observation | Interpretation / next check |
+| --- | --- |
+| NOERROR with expected address/alias data | The queried resolver answered that record lookup; endpoint reachability remains unproven. |
+| NXDOMAIN | The name is reported nonexistent in this DNS view. Check spelling, exact FQDN, intended zone/view, and record creation/delegation. |
+| NOERROR with no relevant answer | The requested record type may be absent; inspect the response and alias chain. An absent AAAA alone does not mean the name has no A record. |
+| SERVFAIL | Resolution/validation failed. DNSSEC, upstream, delegation, or authoritative problems are possible; escalate with the response. |
+| REFUSED | The server declined the query; investigate resolver policy/access and whether this is the intended resolver. |
+| Timeout / no reachable server | Check resolver service/path, VPN/routes, and DNS transport access. This is different from a negative DNS answer. |
+| Unexpected address or alias | Compare with the intended environment and DNS view before declaring the response wrong. |
+
+Read the DNS response status as well as the shell exit code. `dig` can exit zero after receiving a negative DNS response; command completion alone does not mean the name resolved to a usable address. [DNS-1]
+
+### 16.4 Step 3 — Cross-check with nslookup
+
+```bash
+dns_check nslookup -type=A "${DNS_NAME}."
+dns_check nslookup -type=AAAA "${DNS_NAME}."
+```
+
+Record the answering server, address/alias results, and any error. A "Non-authoritative answer" commonly means a recursive resolver answered; that label alone does not indicate a fault. `nslookup` provides another DNS query tool, but two tools using the same resolver are not two independent sources of truth. [DNS-2]
+
+### 16.5 Step 4 — Compare the system lookup path and approved resolvers
+
+DNS tools query DNS servers. An application's lookup may also use hosts files, NSS, a local stub, its own cache, or a custom resolver. Check the system path:
+
+```bash
+dns_check getent ahosts "$DNS_NAME"
+
+# Where systemd-resolved is used:
+dns_check resolvectl query "$DNS_NAME"
+```
+
+`getent` follows the host's NSS configuration for the selected database. Repeated address rows can represent different socket types. An application's browser/runtime/container may still use another lookup mechanism or cache, so record that context rather than assuming the host lookup is identical. [DNS-3] [DNS-4]
+
+If a resolver comparison is warranted, set the IP address of an approved resolver serving the intended DNS view:
+
+```bash
+DNS_RESOLVER=''
+dns_check dig "@${DNS_RESOLVER:?Set an approved resolver IP address}" \
+  +time=2 +tries=1 "${DNS_NAME}." A
+dns_check nslookup -type=A "${DNS_NAME}." \
+  "${DNS_RESOLVER:?Set an approved resolver IP address}"
+```
+
+If transport behavior is suspect, compare a TCP query to the same resolver:
+
+```bash
+dns_check dig "@${DNS_RESOLVER:?Set an approved resolver IP address}" \
+  +tcp +time=2 +tries=1 "${DNS_NAME}." A
+```
+
+A successful TCP query with failing UDP suggests a transport/path-specific investigation; it does not by itself prove a particular firewall rule is wrong. Both paths matter for DNS operation.
+
+Use another approved resolver or authoritative-source evidence only when its view is relevant. Public resolvers may legitimately lack private records; querying them with internal names can disclose those names. Split DNS, geolocation, load balancing, and changing record sets can produce legitimate differences. Compare expected targets/record sets, not merely whether two replies contain identical ordered IP lists.
+
+For stale-looking answers, record response time, resolver, record/alias TTLs, recent change time, and expected previous TTL. Negative responses can also be cached. A current TTL is not a universal "propagation time" or proof of when a record changed. Preserve evidence before any owner-directed cache action; do not blindly flush caches, disable DNSSEC, or switch resolvers.
+
+### 16.6 Step 5 — Separate DNS from HTTPS connectivity
+
+Once the answers are understood, test the original endpoint with its normal scheme, hostname, port, and path. The following examples perform a bounded, direct HTTPS GET to `/`; replace the path if the incident concerns another endpoint:
+
+```bash
+dns_check curl --noproxy '*' --connect-timeout 3 --max-time 10 \
+  --silent --show-error --dump-header - --output /dev/null \
+  --write-out '\nremote_ip=%{remote_ip} http_code=%{http_code} name_lookup_seconds=%{time_namelookup}\n' \
+  "https://${DNS_NAME}/"
+```
+
+These are direct-path diagnostics. If the environment requires a proxy, follow the intended proxy path and record where name resolution occurs; direct access being blocked does not establish a DNS failure. Avoid attributing a proxy's lookup result to the client's local resolver.
+
+For a controlled comparison, obtain a verified expected IPv4 address from the service owner or deployment record, then override resolution for this curl request only:
+
+```bash
+DNS_EXPECTED_IPV4=''
+dns_check curl --noproxy '*' --connect-timeout 3 --max-time 10 \
+  --resolve "${DNS_NAME}:443:${DNS_EXPECTED_IPV4:?Set the verified expected IPv4 address}" \
+  --silent --show-error --dump-header - --output /dev/null \
+  --write-out '\nremote_ip=%{remote_ip} http_code=%{http_code}\n' \
+  "https://${DNS_NAME}/"
+```
+
+`--resolve` substitutes the address for the specified hostname/port while retaining the URL hostname for HTTP and TLS. Certificate validation stays enabled. A bare-IP HTTPS test can fail because the hostname or virtual host differs; do not disable certificate checks to declare success. [DNS-5]
+
+| Comparison | Evidence-based conclusion |
+| --- | --- |
+| Normal lookup fails, but the verified-address override produces the expected response | Supports a name-resolution/path difference as a lead; compare resolver/application/proxy behavior before assigning root cause. |
+| Expected DNS answers exist, but the connection times out or is refused | Investigate route, firewall, listener, proxy, or endpoint state; DNS success does not prove reachability. |
+| Connection succeeds but TLS fails | Investigate certificate, hostname/SNI, trust, and time as applicable. |
+| HTTP response is unexpected | Investigate the virtual host/application/backend and expected response, alongside the actual destination IP. |
+| Behavior differs by address family | Compare A/AAAA answers and IPv4/IPv6 reachability; a valid AAAA can coexist with a broken IPv6 path. |
+
+The examples do not use `--fail`, so an HTTP error may still have curl exit code zero. Compare actual status/content with the agreed endpoint expectation. A successful request to one load-balanced address does not validate every address or backend.
+
+### 16.7 Step 6 — Confirm findings and escalate
+
+Repeat the relevant lookup and request from the originally affected client context and record UTC time. Compare with a known-working client where useful, preserving differences in network, resolver, VPN, address family, application cache, and deployed environment.
+
+Escalate DNS-record/view/validation problems to the DNS owner, resolver reachability or VPN routing to the network/platform owner, and post-resolution TLS/application failures to their responsible owners. Use Section 8 immediately for significant outage impact or an unclear next safe action.
+
+Provide the exact FQDN and query types, client context, resolver IP, full response/status/TTL evidence, expected record source, recent changes, and normal-versus-controlled request results. Separate a confirmed record problem from a suspected cache or connectivity cause.
+
+No resolver configuration rollback is needed for these checks: `--resolve` affects only its curl invocation. Actual DNS-record changes, resolver edits, or cache actions require an owner-directed recovery plan and verification from affected clients.
+
+### 16.8 Findings and completion record
+
+| Field | Actual finding |
+| --- | --- |
+| Host / application / network / impact | `<affected client, container/VPN/proxy context>` |
+| UTC onset and observation time | `<actual times; mark estimates>` |
+| Hostname and original URL/port/path | `<exact values>` |
+| Expected DNS view and record source | `<owner/zone/deployment evidence>` |
+| Configured stub / upstream / approved comparison resolver | `<actual addresses and relevant interface>` |
+| dig A / AAAA / CNAME | `<status, answers, aliases, TTLs, answering server, exit code>` |
+| nslookup results | `<query type, server, answer/error>` |
+| System/application lookup | `<getent/resolvectl/app observations and differences>` |
+| Normal endpoint / controlled override | `<actual destination, HTTP/TLS/connection result>` |
+| Change/cache context | `<record change time, TTL context, view, uncertainty>` |
+| Conclusion and next owner | `<confirmed facts, hypothesis, action/escalation>` |
+| Evidence links | `<protected captures or reviewed/redacted screenshots>` |
+
+For an actual investigation:
+
+- [ ] Queried the exact name with `dig` and preserved full response metadata.
+- [ ] Cross-checked relevant records with `nslookup`.
+- [ ] Compared answers with an owner-confirmed expected DNS view/record.
+- [ ] Checked the affected client's system/application resolver context.
+- [ ] Distinguished resolution failure from connection, TLS, and HTTP failures.
+- [ ] Recorded uncertainty, timestamps, evidence, and escalation/next action.
+
+This ticket documents a procedure; placeholder queries and example addresses are not executed incident evidence. Do not mark name resolution or service recovery confirmed until actual observations support it.
+
+### 16.9 References
+
+- **[DNS-1]** [Ubuntu/BIND dig manual](https://manpages.ubuntu.com/manpages/noble/man1/dig.1.html)
+- **[DNS-2]** [Ubuntu/BIND nslookup manual](https://manpages.ubuntu.com/manpages/noble/man1/nslookup.1.html)
+- **[DNS-3]** [systemd resolvectl manual](https://www.freedesktop.org/software/systemd/man/latest/resolvectl.html)
+- **[DNS-4]** [Ubuntu getent manual: NSS lookups](https://manpages.ubuntu.com/manpages/noble/man1/getent.1.html)
+- **[DNS-5]** [curl manual: resolution overrides and connection behavior](https://curl.se/docs/manpage.html#--resolve)
+- [ISC BIND manual pages](https://bind9.readthedocs.io/en/latest/manpages.html)
+- Local references for the inspected environment: `man dig`, `man nslookup`, `man resolvectl`, `man getent`, `man nsswitch.conf`, `man resolv.conf`, and `man curl`.
+
