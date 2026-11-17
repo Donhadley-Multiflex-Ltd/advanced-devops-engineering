@@ -2,16 +2,20 @@
 
 **DEVOPS-010-A: Create the Runbook Structure and Troubleshooting Introduction**
 
+**DEVOPS-010-C: Document High CPU Troubleshooting Steps — Section 13**
+
+**DEVOPS-010-D: Document High Memory Troubleshooting Steps — Section 14**
+
 | Document control | Value |
 | --- | --- |
-| Purpose | Shared structure and introductory guidance for Linux operations troubleshooting |
-| Version | 0.1 |
+| Purpose | Shared Linux troubleshooting structure, introductory guidance, and High CPU/Memory investigation |
+| Version | 0.3 |
 | Status | Draft for team review; environment-specific details require completion before operational adoption |
 | Created | 2026-11-17 |
 | Owner | `<Linux operations team or named owner>` |
 | Reviewer | `<technical reviewer>` |
-| Repository path | `docs/linux/linux-operations-runbook.md` |
-| Related Jira ticket | DEVOPS-010-A — `<add actual Jira URL>` |
+| Repository path | `runbooks/linux/linux-operations-runbook.md` |
+| Related Jira tickets | DEVOPS-010-A, DEVOPS-010-C, and DEVOPS-010-D — `<add actual Jira URLs>` |
 
 ## Contents
 
@@ -27,6 +31,8 @@
 10. [Recovery verification and closure](#10-recovery-verification-and-closure)
 11. [Runbook ownership and maintenance](#11-runbook-ownership-and-maintenance)
 12. [Acceptance criteria mapping](#12-acceptance-criteria-mapping)
+13. [High CPU troubleshooting](#13-high-cpu-troubleshooting)
+14. [High Memory troubleshooting](#14-high-memory-troubleshooting)
 
 ## 1. Purpose and troubleshooting introduction
 
@@ -206,6 +212,8 @@ Add reviewed procedures as they become available. A planned entry is not an inst
 | nginx service/process inspection | `docs/linux/nginx-service-state-and-process-inspection.md` | Existing training document; confirm repository location and review status |
 | nginx targeted recovery | `docs/linux/nginx-restore-service-availability.md` | Existing training document; confirm environment suitability |
 | Poor first responses | `docs/linux/nginx-evidence-driven-troubleshooting-first-responses.md` | Existing training guidance; confirm review status |
+| High CPU | [Section 13](#13-high-cpu-troubleshooting) | Documented for DEVOPS-010-C; validate against the target environment |
+| High Memory | [Section 14](#14-high-memory-troubleshooting) | Documented for DEVOPS-010-D; validate against the target environment |
 | Generic service startup failure | `<add reviewed procedure path>` | Planned |
 | Resource exhaustion | `<add reviewed procedure path>` | Planned |
 | Endpoint/network failure | `<add reviewed procedure path>` | Planned |
@@ -289,6 +297,8 @@ Keep changes in GitHub and reference their Jira work items. Review applicability
 | Date | Version | Change |
 | --- | --- | --- |
 | 2026-11-17 | 0.1 | Created reusable structure, scope, introduction, usage guidance, baseline note, and escalation model for DEVOPS-010-A |
+| 2026-11-17 | 0.2 | Added High CPU investigation using top, sorted ps output, repeated sampling, process ownership, and recent-change correlation for DEVOPS-010-C |
+| 2026-11-17 | 0.3 | Added High Memory investigation using free, memory-sorted ps, cache/available/swap interpretation, trends, and pressure evidence for DEVOPS-010-D |
 
 ## 12. Acceptance criteria mapping
 
@@ -300,8 +310,6 @@ Keep changes in GitHub and reference their Jira work items. Review applicability
 | When to escalate | Section 8 explicit triggers, timing, routing, and handover requirements |
 | Brief baseline evidence note | Section 4 minimum capture guidance and timestamped example |
 | Consistent team approach | Shared section order, incident timeline, ownership, review, and closure conventions |
-
-**Review boundary:** This ticket creates the runbook foundation. Team contacts, operational thresholds, and service-specific procedures must be completed and reviewed for the intended environment before operational adoption. The existence of this document does not demonstrate that a server incident has been investigated or resolved.
 
 ### DEVOPS-010-C acceptance criteria
 
@@ -542,8 +550,6 @@ For this documentation ticket, review the procedure against these requirements; 
 - **[CPU-3]** [Linux kernel cgroup v2 CPU controller](https://www.kernel.org/doc/html/latest/admin-guide/cgroup-v2.html#cpu)
 - Local references for the inspected environment: `man top`, `man ps`, `man uptime`, `man nproc`, `man systemctl`, and `man journalctl`.
 
-
-
 ## 14. High Memory troubleshooting
 
 ### 14.1 Purpose, scope, and starting questions
@@ -691,7 +697,6 @@ This requests seven reports about five seconds apart, covering roughly 30 second
 
 If `vmstat` or relevant history is unavailable, record that limitation rather than assuming there is no paging. Even with no swap traffic, allocation failures or cgroup OOM can still occur.
 
-
 ### 14.6 Step 5 — Investigate application changes, limits, and OOM evidence
 
 Check whether the increase matches a deployment, runtime/configuration change, new batch size, queue backlog, traffic growth, worker-count change, or cache warm-up. Record the actual deployed version and change time from delivery records; source commits alone do not prove what is running.
@@ -775,4 +780,3 @@ This ticket supplies documentation, not a completed incident investigation. Keep
 - **[MEM-4]** [Linux kernel cgroup v2 memory controller and event accounting](https://www.kernel.org/doc/html/latest/admin-guide/cgroup-v2.html#memory)
 - **[MEM-5]** [Ubuntu procps vmstat manual: interval rates and swap activity](https://manpages.ubuntu.com/manpages/noble/man8/vmstat.8.html)
 - Local references: `man free`, `man ps`, `man vmstat`, `man systemctl`, and `man journalctl` for the inspected environment.
-
