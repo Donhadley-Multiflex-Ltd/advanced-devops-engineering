@@ -1203,3 +1203,231 @@ This ticket documents a procedure; placeholder queries and example addresses are
 - [ISC BIND manual pages](https://bind9.readthedocs.io/en/latest/manpages.html)
 - Local references for the inspected environment: `man dig`, `man nslookup`, `man resolvectl`, `man getent`, `man nsswitch.conf`, `man resolv.conf`, and `man curl`.
 
+
+## 17. Permission Problems
+
+### 17.1 Purpose and scope
+
+Investigate access failures by verifying the required operation, the actual application/user identity, object ownership, and the complete access path **before changing permissions**. Symptoms may include "Permission denied", a failed file open, inability to create a log, or an application response such as HTTP 403. An HTTP status alone does not prove a filesystem mode problem.
+
+Examples assume Ubuntu/Linux and Bash, with GNU `ls`/`id` and util-linux `namei`. Optional ACL checks require `getfacl`. Run diagnostics on the affected host and in the relevant service/container context; Windows Git Bash permissions are not evidence of the remote Linux service's access.
+
+This section collects evidence. It does not change modes, ownership, groups, ACLs, security policy, or service state. Avoid blanket `chmod 777`, recursive ownership changes, and running the application as root to conceal an access fault.
+
+### 17.2 Step 1 — Establish the operation and identity with id
+
+Record the exact error, UTC time, application/service, absolute path, and operation: read, modify, execute, list, traverse, create, rename, or delete. A program editing an existing file by creating a temporary file and renaming it has different requirements from simply writing to that file.
+
+Confirm your current session identity:
+
+```bash
+date -u +'%Y-%m-%dT%H:%M:%SZ'
+hostname
+pwd
+id
+```
+
+`id` without an account argument describes the current process's user/group identity; it does not establish the application's identity. `id <account>` queries account information, which can differ from credentials retained by an already running service after a group-membership change. [PERM-1]
+
+Set the actual affected path and confirmed application account, then initialize evidence capture:
+
+```bash
+PERM_PATH=''
+PERM_USER=''
+umask 077
+PERM_EVIDENCE_DIR="$HOME/devops-evidence/DEVOPS-010-H/$(date -u +'%Y%m%dT%H%M%SZ')-$$"
+mkdir -p "$PERM_EVIDENCE_DIR"
+PERM_EVIDENCE_FILE="$PERM_EVIDENCE_DIR/permission-investigation.log"
+touch "$PERM_EVIDENCE_FILE"
+
+perm_check() {
+  local observed_rc
+  {
+    printf '\n[%s] COMMAND:' "$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+    printf ' %q' "$@"
+    printf '\n'
+    if "$@"; then
+      observed_rc=0
+    else
+      observed_rc=$?
+    fi
+    printf '[%s] COMMAND_EXIT_CODE=%s\n' \
+      "$(date -u +'%Y-%m-%dT%H:%M:%SZ')" "$observed_rc"
+  } 2>&1 | tee -a "$PERM_EVIDENCE_FILE"
+}
+
+perm_check id
+perm_check id "${PERM_USER:?Set the confirmed application account}"
+```
+
+Keep the same shell session. The wrapper logs results and continues after unsuccessful checks; its return status is not a remediation gate. Stop relying on the log if creation or `tee` fails, and use a verified alternate evidence route.
+
+For a running service, identify the actual process that accesses the object. A privileged master and its workers can use different accounts. After setting the observed PID:
+
+```bash
+PERM_PID=''
+perm_check ps -p "${PERM_PID:?Set the observed process PID}" \
+  -o pid,ppid,user,group,args
+perm_check sudo awk '/^(Uid|Gid|Groups):/ {print}' \
+  "/proc/${PERM_PID:?Set the observed process PID}/status"
+```
+
+These Linux process fields help compare actual IDs/groups with the account database. Record changed/exited PIDs and access limitations. Containers may map numeric IDs differently, and services may have custom groups or filesystem namespaces; account names alone are insufficient.
+
+### 17.3 Step 2 — Verify ownership and modes with ls -l
+
+The required basic command is:
+
+```bash
+ls -l
+```
+
+That lists the current directory. For the actual reported object, use a targeted inspection:
+
+```bash
+perm_check ls -l -- "${PERM_PATH:?Set the exact affected path}"
+perm_check ls -ld -- "$PERM_PATH"
+perm_check ls -ldn -- "$PERM_PATH"
+```
+
+`-d` inspects a directory itself instead of listing its contents. `-n` exposes numeric owner/group IDs, useful when names differ across hosts or containers. [PERM-2]
+
+Illustrative long listing, not a result from your server:
+
+```text
+-rw-r----- 1 appsvc appreaders 1200 Nov 17 10:00 app.conf
+```
+
+| Part | Meaning / check |
+| --- | --- |
+| Leading type character | Regular file, directory, or symbolic link; each has different access implications. |
+| Owner / group | Compare with the intended ownership policy and the application's actual IDs/groups. |
+| Owner rw-, group r--, other --- | The example grants owner read/write and group read; it grants no access through the other class. |
+| Numeric IDs | Confirm the same identity is meant when names or mappings differ. |
+
+For basic Unix discretionary access, owner, group, and other are not three permission sets a user can freely combine. An owner denied an operation does not simply fall back to more permissive other bits. ACLs and additional controls require separate inspection. [PERM-3]
+
+A root-owned file is not automatically misowned. A web worker often needs read access to content while deployment/configuration ownership stays with another account. Verify the intended service policy rather than making nginx or another worker own everything.
+
+### 17.4 Step 3 — Verify every access-path component with namei
+
+The required example is below; substitute the real path before using it:
+
+```bash
+namei -l /path/to/file
+```
+
+For the path already recorded in this session:
+
+```bash
+perm_check namei -l "${PERM_PATH:?Set the exact affected path}"
+```
+
+`namei -l` follows the path and displays component metadata, including modes and ownership. It also shows symbolic-link resolution. Examine every parent directory and the eventual target, not just the final filename. It reports metadata under the invoking context; it is not a complete simulation of another account's effective access. [PERM-4]
+
+To reach a known file, a process needs search/traversal (`x`) access on each containing directory. A final file's read permission cannot compensate for an unsearchable parent. Directory read (`r`) allows listing names; it is distinct from traversal. Relative paths depend on the application's working directory, and link targets must be checked in their actual location. [PERM-5]
+
+For example, `app.conf` may be group-readable while `/srv/app` only allows its root owner to traverse. That is a parent-path access hypothesis to verify; making `app.conf` world-writable would not repair the blocked directory traversal.
+
+If the investigator cannot inspect a component, record where access stops. Authorized elevated inspection can help reveal its metadata, but a successful root inspection does not demonstrate that the application can reach it. A nonexistent component or broken link may be a path/configuration error rather than a permission fault.
+
+### 17.5 Step 4 — Match permissions to the required operation
+
+| Intended operation | What to investigate |
+| --- | --- |
+| Read a known regular file | Traversal through parents and read access to the target. |
+| Modify existing file contents | Traversal plus write access to that file; application-specific atomic replacement may also need parent-directory rights. |
+| Execute a program/script | Traversal and applicable execute/read/interpreter access; also check mount/security restrictions. |
+| List a directory and inspect entries | Directory read plus traversal where needed for entry metadata/access. |
+| Create a file | Traversal to the parent and write/search rights on that parent, plus policy/quota/filesystem constraints. |
+| Rename/delete an entry | Relevant parent-directory permissions and applicable sticky-bit/policy checks; the file's own write bit alone does not decide this. |
+
+A non-mutating check under a confirmed account can support the investigation:
+
+```bash
+perm_check sudo -u "${PERM_USER:?Set the confirmed application account}" -- \
+  test -r "${PERM_PATH:?Set the exact affected path}"
+
+# Use only if the failed operation requires modifying this existing file:
+perm_check sudo -u "$PERM_USER" -- test -w "$PERM_PATH"
+```
+
+For a directory, `test -x <directory>` checks search access in that test context. These commands do not open/truncate/write the target. `test` normally prints nothing: inspect the recorded exit code, where zero means that access test passed.
+
+A fresh `sudo -u` process may have different supplementary groups, capabilities, security labels, namespaces, or sandbox restrictions from the running service. Treat the test as supporting evidence, not proof that the original application operation will succeed. Recheck the actual operation through its normal validation path when appropriate, without creating arbitrary production writes just for troubleshooting.
+
+### 17.6 Step 5 — Inspect ACLs and other access controls if needed
+
+If traditional ownership/modes do not explain the failure, check ACLs on the target and any relevant parent. A `+` marker in GNU `ls` long output can indicate an alternate access method such as an ACL; inspect the actual ACL instead of inferring effective rights from mode bits alone.
+
+```bash
+# If getfacl is available and you are authorized to inspect this path:
+perm_check getfacl -p "${PERM_PATH:?Set the exact affected path}"
+```
+
+Review named users/groups, the ACL mask, and effective-rights comments. A mask can limit a named user/group grant; directory default ACLs affect inheritance for newly created objects rather than granting parent traversal by themselves. Record any missing ACL tooling or inspection rights. [PERM-3] [PERM-6]
+
+Other causes to investigate with the responsible owner include:
+
+- SELinux/AppArmor denials or systemd service filesystem restrictions.
+- A read-only or `noexec` mount, immutable flags, or a different container/chroot view of the path.
+- Network filesystem identity mapping, server policy, or stale credentials/groups.
+- Wrong path/working directory, broken links, or an application-level access rule.
+- Capacity/quota failures that may have been described imprecisely as "permission issues".
+
+Preserve the relevant error/log context and exact failing operation. Do not disable enforcement or alter shared filesystem policy just to see whether the error disappears.
+
+### 17.7 Step 6 — Confirm the diagnosis before any permission change
+
+Proceed to a targeted remediation plan only after recording:
+
+1. The failing operation, exact object, and first relevant blocking path/policy.
+2. The identity and groups of the process that needs access.
+3. Current owner/group, numeric mode, ACLs, and relevant filesystem/security context.
+4. The intended least-privilege ownership/access policy, confirmed with the owner.
+5. The smallest required correction, expected impact, rollback metadata, and verification step.
+
+If a correction is later justified, preserve restorable mode/UID/GID/ACL state before changing it. A change to one parent directory or group access policy may be sufficient; recursively changing an entire tree can introduce new faults and expose unrelated data. Use the relevant reviewed remediation procedure and operational authority.
+
+After correction, verify the intended identity's access and original application behavior while confirming unrelated users did not receive unintended access. Investigate recurring bad ownership/modes at their source, such as deployment, file creation, or service configuration, rather than repeatedly fixing symptoms.
+
+Escalate using Section 8 for an unknown service owner, unclear expected policy, security-control denial, production impact, or insufficient visibility. The diagnostic commands require no service rollback; any actual ownership/mode/ACL/policy change needs its own reversal and validation plan.
+
+### 17.8 Findings and completion record
+
+| Field | Actual finding |
+| --- | --- |
+| Host / application / impact / UTC time | `<confirmed context>` |
+| Exact path and required operation | `<absolute path, read/create/rename/etc.>` |
+| Session versus application identity | `<UID/GID/groups and running-process evidence>` |
+| Current and intended owner/group | `<names, numeric IDs, policy source>` |
+| Target permissions | `<actual ls output and applicable class>` |
+| Parent path / symlink findings | `<namei result and blocking component>` |
+| Account-context tests | `<command, exit code, and limitations>` |
+| ACL / security / mount context | `<evidence or unavailable>` |
+| Confirmed cause or remaining hypothesis | `<specific evidence and uncertainty>` |
+| Proposed correction / rollback / verification | `<owner-directed plan; not executed unless recorded>` |
+| Escalation and evidence links | `<owner, time, protected captures>` |
+
+For an actual investigation:
+
+- [ ] Captured `id` and verified which identity actually performs the failed operation.
+- [ ] Used `ls -l` and targeted directory/numeric-ID inspection to verify ownership/modes.
+- [ ] Used `namei -l /path/to/file` with the real path to inspect parents and symlink targets.
+- [ ] Matched access requirements to the actual operation.
+- [ ] Investigated ACL/security/context differences where basic modes were insufficient.
+- [ ] Completed ownership and access-path checks before proposing permission changes.
+- [ ] Recorded the diagnosis, uncertainty, next owner, and recovery implications.
+
+This ticket documents the procedure. Example identities, paths, and listings are not evidence that a target server was inspected. Keep raw metadata/logs protected and share reviewed captures through the incident process.
+
+### 17.9 References
+
+- **[PERM-1]** [Ubuntu/GNU id manual](https://manpages.ubuntu.com/manpages/noble/man1/id.1.html)
+- **[PERM-2]** [Ubuntu/GNU ls manual](https://manpages.ubuntu.com/manpages/noble/man1/ls.1.html)
+- **[PERM-3]** [Ubuntu/Linux ACL semantics and access-check algorithm](https://manpages.ubuntu.com/manpages/noble/man5/acl.5.html)
+- **[PERM-4]** [Ubuntu util-linux namei manual](https://manpages.ubuntu.com/manpages/noble/man1/namei.1.html)
+- **[PERM-5]** [Linux path resolution and directory search permission](https://man7.org/linux/man-pages/man7/path_resolution.7.html)
+- **[PERM-6]** [Ubuntu getfacl manual](https://manpages.ubuntu.com/manpages/noble/man1/getfacl.1.html)
+- Local references: `man ls`, `man namei`, `man id`, `man acl`, `man getfacl`, and service/security/filesystem documentation for the inspected environment.
+
