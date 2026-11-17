@@ -303,3 +303,217 @@ Keep changes in GitHub and reference their Jira work items. Review applicability
 
 **Review boundary:** This ticket creates the runbook foundation. Team contacts, operational thresholds, and service-specific procedures must be completed and reviewed for the intended environment before operational adoption. The existence of this document does not demonstrate that a server incident has been investigated or resolved.
 
+## 13. High CPU troubleshooting
+
+### 13.1 Purpose, symptoms, and scope
+
+Identify which process or workload is consuming CPU, establish whether the increase is temporary or persistent, and investigate recent application changes. Possible symptoms include a CPU alert, slow responses, longer job queues, or reduced throughput. High CPU can also represent useful work; establish user impact and expected workload behavior before treating it as a fault.
+
+This procedure covers investigation on Ubuntu/Linux with Bash and procps `top`/`ps`. It does not authorize killing processes, changing priorities, restarting services, rolling back a deployment, or generating stress-test load. Capture evidence first; use a confirmed diagnosis and the service's remediation procedure for changes.
+
+For containers, compare measurements with the workload's allocated CPU and throttling metrics as well as host capacity. Host CPU availability can coexist with a workload-specific CPU limit. Escalate to the platform owner for the correct container/cgroup interpretation. [CPU-3]
+
+### 13.2 Step 1 — Record the baseline and context
+
+Confirm the host, environment, affected application, alert time, normal CPU range, and client impact. Record the CPU threshold and duration used by the actual monitoring alert; do not invent a universal threshold.
+
+Create an evidence directory in the same Bash session:
+
+```bash
+umask 077
+CPU_EVIDENCE_DIR="$HOME/devops-evidence/DEVOPS-010-C/$(date -u +'%Y%m%dT%H%M%SZ')-$$"
+mkdir -p "$CPU_EVIDENCE_DIR"
+CPU_EVIDENCE_FILE="$CPU_EVIDENCE_DIR/high-cpu.log"
+touch "$CPU_EVIDENCE_FILE"
+
+{
+  date -u +'%Y-%m-%dT%H:%M:%SZ'
+  hostname
+  uptime
+  nproc
+  date -u +'%Y-%m-%dT%H:%M:%SZ'
+} 2>&1 | tee -a "$CPU_EVIDENCE_FILE"
+```
+
+Stop relying on the evidence log if directory creation or `tee` reports an error. Use an alternate writable location or remote terminal capture where necessary.
+
+`nproc` provides execution-context CPU information; record any service/container quota separately. Load average is not a CPU percentage and can include tasks waiting on uninterruptible I/O. Compare it with CPU activity, capacity, and service performance rather than declaring CPU saturation from load alone.
+
+### 13.3 Step 2 — Inspect live activity with top
+
+Timestamp the session, then open `top` directly in the terminal:
+
+```bash
+date -u +'%Y-%m-%dT%H:%M:%SZ'
+top
+date -u +'%Y-%m-%dT%H:%M:%SZ'
+```
+
+While `top` is running:
+
+| Key / field | Use |
+| --- | --- |
+| Shift+P (`P`) | Sort processes by CPU usage. |
+| `1` | Toggle individual logical CPU summaries. |
+| `c` | Toggle command-name/command-line display. |
+| PID, USER, %CPU, COMMAND | Identify the consumer and its account. |
+| CPU summary | Compare user/system activity, idle time, I/O wait, and VM steal time. |
+| `q` | Exit without changing processes. |
+
+Observe several refreshes and record the recurring top PIDs and their CPU usage. Treat the initial frame cautiously; later refreshes provide interval observations. In the usual per-CPU task display, one busy logical CPU is about 100%; a multithreaded process can exceed 100%. Display normalization can change with `top`'s Irix/Solaris mode. Record the mode when comparing values. [CPU-1]
+
+Distinguish a busy process from high I/O wait or VM steal; those observations suggest different investigations. A process at 100% does not by itself prove every CPU on the host is saturated. Capture a timestamped screenshot or use the batch capture below for shareable evidence.
+
+### 13.4 Step 3 — Rank and identify processes with ps
+
+Run the exact CPU-sorted snapshot requested by this ticket:
+
+```bash
+{
+  date -u +'%Y-%m-%dT%H:%M:%SZ'
+  ps aux --sort=-%cpu
+  cpu_ps_rc=$?
+  printf 'ps_exit_code=%s\n' "$cpu_ps_rc"
+  date -u +'%Y-%m-%dT%H:%M:%SZ'
+} 2>&1 | tee -a "$CPU_EVIDENCE_FILE"
+```
+
+Review the first process rows after the header. Record PID, user, `%CPU`, start time, CPU time, and command. **procps `ps` reports CPU usage averaged over process lifetime**, rather than the current `top` refresh interval. An old busy process may remain high in this ranking, while a new spike in a long-lived process may look modest. Use this snapshot to identify candidates and repeated `top` samples to assess current activity. [CPU-2]
+
+Set the actual PID from your observations before collecting details:
+
+```bash
+CPU_PID=''
+
+{
+  date -u +'%Y-%m-%dT%H:%M:%SZ'
+  ps -p "${CPU_PID:?Set the observed numeric PID}" \
+    -o pid,ppid,user,lstart,etime,pcpu,pmem,nlwp,args
+  cpu_detail_rc=$?
+  printf 'ps_detail_exit_code=%s\n' "$cpu_detail_rc"
+  date -u +'%Y-%m-%dT%H:%M:%SZ'
+} 2>&1 | tee -a "$CPU_EVIDENCE_FILE"
+
+# For a systemd host, inspect which unit owns that PID if available.
+date -u +'%Y-%m-%dT%H:%M:%SZ'
+sudo systemctl status "${CPU_PID:?Set the observed numeric PID}" --no-pager --full
+```
+
+Check the parent PID, service, owner, start time, and expected business function. A command name alone does not establish the workload's purpose. If the process exits or the PID changes, record that result and identify the new consumer; PIDs can be reused.
+
+For a multithreaded application, optionally inspect its threads:
+
+```bash
+date -u +'%Y-%m-%dT%H:%M:%SZ'
+top -H -p "${CPU_PID:?Set the observed numeric PID}"
+```
+
+Press `P` to sort and `q` to leave. Record whether one thread or several remain busy. Do not sum thread percentages and the parent process total as separate usage. Avoid the kill or priority-changing controls during evidence collection.
+
+### 13.5 Step 4 — Determine whether the load is temporary or persistent
+
+A single snapshot cannot establish persistence. Capture a bounded interval and compare with historical monitoring and the normal workload schedule.
+
+The following batch capture requests 13 frames at five-second refresh intervals, covering roughly one minute. It uses UTC and the C locale for consistent output, and sorts by CPU:
+
+```bash
+{
+  date -u +'%Y-%m-%dT%H:%M:%SZ'
+  env TZ=UTC LC_ALL=C top -b -d 5 -n 13 -o '+%CPU'
+  cpu_top_rc=$?
+  printf 'top_exit_code=%s\n' "$cpu_top_rc"
+  date -u +'%Y-%m-%dT%H:%M:%SZ'
+} 2>&1 | tee -a "$CPU_EVIDENCE_DIR/top-intervals.log"
+```
+
+Inspect frames after the first. Record the observation start/end, recurring process or workload, approximate interval CPU range, host idle behavior, and application latency/errors. The highest PID may change when workers are short-lived; track the parent/service workload too. A missing process in one later snapshot does not prove the whole workload recovered.
+
+| Observation | Interpretation and next check |
+| --- | --- |
+| Short burst followed by return to baseline, matching a known startup/job/traffic event | Consistent with temporary load during this window. Confirm the job/event and impact; do not assume it was harmless. |
+| Same process/workload stays unusually busy across samples and longer monitoring windows | Persistent within the observed period. Investigate its work, requests, logs, recent changes, and service limits. |
+| Bursts repeat on a schedule | Recurring load. Correlate scheduled jobs, timers, queue processing, or periodic traffic. |
+| High load average with substantial CPU idle and I/O wait | Investigate storage/dependency waiting; CPU saturation is not established. |
+| Current CPU has fallen but alerts/latency continue | Capture the timeline and investigate remaining symptoms; do not close based only on CPU dropping. |
+
+One minute is an initial sample, not a universal persistence threshold. Extend or repeat the observation using the service's alert duration and normal job length. Review available five-, fifteen-minute, or longer monitoring history as appropriate. If history is unavailable, state that the classification is limited to the captured window. Escalate immediately for serious impact rather than waiting for a sampling window to finish.
+
+### 13.6 Step 5 — Check whether the application recently changed
+
+Compare the first observed increase with the actual deployed change timeline. Ask the service owner and inspect GitHub delivery records and Jira change references as applicable.
+
+| Potential change | Evidence to record |
+| --- | --- |
+| New application release | Deployment time, environment, release/version, deployed commit SHA or image digest, and delivery-run URL. |
+| Configuration or feature flag | Exact setting, change time, intended effect, and change record; redact values that are secrets. |
+| Dependency/runtime/package update | Previous/current version and when the running service began using it. |
+| Restart, rollout, or scaling change | Process start/rollout time, instance count, CPU allocation, and limits. |
+| New schedule, batch size, or queue backlog | Job/timer definition, run time, job ID, backlog, and normal execution duration. |
+| Changed traffic or input | Request volume, endpoint/input mix, and affected versus unaffected instances. |
+
+After mapping the PID to a service, optionally capture recent unit logs. Set the actual unit first:
+
+```bash
+CPU_UNIT=''
+
+{
+  date -u +'%Y-%m-%dT%H:%M:%SZ'
+  sudo journalctl -u "${CPU_UNIT:?Set the identified service unit}" \
+    --since '30 minutes ago' --utc --no-pager -o short-iso-precise -n 100
+  cpu_journal_rc=$?
+  printf 'journal_exit_code=%s\n' "$cpu_journal_rc"
+  date -u +'%Y-%m-%dT%H:%M:%SZ'
+} 2>&1 | tee -a "$CPU_EVIDENCE_FILE"
+```
+
+Use a time range covering the actual incident; the last 100 entries may not contain its onset. Application/container logs may be elsewhere. For scheduled work on a systemd host, `systemctl list-timers --all --no-pager` can help identify timer schedules; also check the relevant application's job scheduler or cron records.
+
+Repository `git log` describes source history, not proof of what is running. Verify the deployed version through deployment records or a trusted application version endpoint. A CPU increase after a release is a correlation to investigate, not proof of a code regression. Compare pre/post behavior, equivalent traffic, and unaffected instances before recommending a rollback. Process start time can support the timeline but does not by itself identify the release.
+
+Record the recent-change finding as **confirmed change**, **no change found in the reviewed records**, or **unknown because records/access are missing**. Do not turn an unverified "no" into a fact.
+
+### 13.7 Step 6 — Decide the next action and escalate
+
+- Expected work that completes and returns to baseline: document the event and impact; continue the appropriate monitoring window.
+- Persistent application work, a suspected hot loop, or a release-correlated change: hand evidence to the application owner for targeted profiling and diagnosis.
+- Host contention, high steal, or workload CPU throttling: involve the platform owner with host/workload scope and measurements.
+- Serious latency/errors, unclear ownership, missing access, or no useful progress: use the escalation triggers in Section 8.
+
+Do not kill the top CPU process merely because it ranks first. Do not reboot, change CPU limits, or roll back a release based solely on one screenshot. Those actions require an understood impact, the appropriate operational authority, and a recovery/rollback plan.
+
+This ticket documents investigation. No remediation rollback is needed for the diagnostic checks themselves; they generate output/evidence but do not intentionally change service configuration. Optional profiling or remedial actions require their own documented side effects and procedure.
+
+### 13.8 Findings and completion record
+
+| Field | Actual finding |
+| --- | --- |
+| Host / application / client impact | `<confirmed details>` |
+| UTC onset / capture start and end | `<timestamps; mark estimated onset>` |
+| Monitoring threshold and normal baseline | `<actual values or unavailable>` |
+| CPU capacity / workload limits | `<observed context>` |
+| Main consuming PID(s), parent, user, command, and unit | `<actual process/workload identity>` |
+| top interval observations | `<range, frames/window, user/system/idle/wait/steal notes>` |
+| ps snapshot | `<observations; remember lifetime averaging>` |
+| Temporary/persistent/recurring/undetermined | `<classification, evidence, and limits>` |
+| Recent application change finding | `<confirmed / none found / unknown; record sources>` |
+| Current hypothesis and next check | `<evidence-based statement>` |
+| Escalation / next owner | `<role/person, time, agreed action>` |
+| Evidence | `<protected log links or reviewed screenshots>` |
+
+Completion checks for an actual investigation:
+
+- [ ] Used `top` and recorded repeated observations.
+- [ ] Captured `ps aux --sort=-%cpu` and interpreted lifetime CPU correctly.
+- [ ] Identified the consuming process or workload and its owner, or documented the unresolved limitation.
+- [ ] Assessed temporary versus persistent/recurring behavior over a stated window.
+- [ ] Reviewed recent application changes and recorded the sources and uncertainty.
+- [ ] Recorded impact, evidence, and the next action or escalation.
+
+For this documentation ticket, review the procedure against these requirements; do not mark an actual server investigation complete without its evidence. Command lines and logs can contain sensitive arguments or data; keep raw captures protected and share reviewed/redacted copies.
+
+### 13.9 References
+
+- **[CPU-1]** [Ubuntu procps top manual: interval CPU, threads, sorting, and display modes](https://manpages.ubuntu.com/manpages/noble/man1/top.1.html)
+- **[CPU-2]** [Ubuntu procps ps manual: process selection, sorting, and lifetime CPU](https://manpages.ubuntu.com/manpages/noble/man1/ps.1.html)
+- **[CPU-3]** [Linux kernel cgroup v2 CPU controller](https://www.kernel.org/doc/html/latest/admin-guide/cgroup-v2.html#cpu)
+- Local references for the inspected environment: `man top`, `man ps`, `man uptime`, `man nproc`, `man systemctl`, and `man journalctl`.
