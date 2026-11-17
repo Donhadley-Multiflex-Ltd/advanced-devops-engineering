@@ -2,16 +2,20 @@
 
 **DEVOPS-010-A: Create the Runbook Structure and Troubleshooting Introduction**
 
+**DEVOPS-010-C: Document High CPU Troubleshooting Steps — Section 13**
+
+**DEVOPS-010-D: Document High Memory Troubleshooting Steps — Section 14**
+
 | Document control | Value |
 | --- | --- |
-| Purpose | Shared structure and introductory guidance for Linux operations troubleshooting |
-| Version | 0.1 |
+| Purpose | Shared Linux troubleshooting structure, introductory guidance, and High CPU/Memory investigation |
+| Version | 0.3 |
 | Status | Draft for team review; environment-specific details require completion before operational adoption |
 | Created | 2026-11-17 |
 | Owner | `<Linux operations team or named owner>` |
 | Reviewer | `<technical reviewer>` |
-| Repository path | `docs/linux/linux-operations-runbook.md` |
-| Related Jira ticket | DEVOPS-010-A — `<add actual Jira URL>` |
+| Repository path | `runbooks/linux/linux-operations-runbook.md` |
+| Related Jira tickets | DEVOPS-010-A, DEVOPS-010-C, and DEVOPS-010-D — `<add actual Jira URLs>` |
 
 ## Contents
 
@@ -27,6 +31,8 @@
 10. [Recovery verification and closure](#10-recovery-verification-and-closure)
 11. [Runbook ownership and maintenance](#11-runbook-ownership-and-maintenance)
 12. [Acceptance criteria mapping](#12-acceptance-criteria-mapping)
+13. [High CPU troubleshooting](#13-high-cpu-troubleshooting)
+14. [High Memory troubleshooting](#14-high-memory-troubleshooting)
 
 ## 1. Purpose and troubleshooting introduction
 
@@ -206,6 +212,8 @@ Add reviewed procedures as they become available. A planned entry is not an inst
 | nginx service/process inspection | `docs/linux/nginx-service-state-and-process-inspection.md` | Existing training document; confirm repository location and review status |
 | nginx targeted recovery | `docs/linux/nginx-restore-service-availability.md` | Existing training document; confirm environment suitability |
 | Poor first responses | `docs/linux/nginx-evidence-driven-troubleshooting-first-responses.md` | Existing training guidance; confirm review status |
+| High CPU | [Section 13](#13-high-cpu-troubleshooting) | Documented for DEVOPS-010-C; validate against the target environment |
+| High Memory | [Section 14](#14-high-memory-troubleshooting) | Documented for DEVOPS-010-D; validate against the target environment |
 | Generic service startup failure | `<add reviewed procedure path>` | Planned |
 | Resource exhaustion | `<add reviewed procedure path>` | Planned |
 | Endpoint/network failure | `<add reviewed procedure path>` | Planned |
@@ -289,6 +297,8 @@ Keep changes in GitHub and reference their Jira work items. Review applicability
 | Date | Version | Change |
 | --- | --- | --- |
 | 2026-11-17 | 0.1 | Created reusable structure, scope, introduction, usage guidance, baseline note, and escalation model for DEVOPS-010-A |
+| 2026-11-17 | 0.2 | Added High CPU investigation using top, sorted ps output, repeated sampling, process ownership, and recent-change correlation for DEVOPS-010-C |
+| 2026-11-17 | 0.3 | Added High Memory investigation using free, memory-sorted ps, cache/available/swap interpretation, trends, and pressure evidence for DEVOPS-010-D |
 
 ## 12. Acceptance criteria mapping
 
@@ -301,7 +311,29 @@ Keep changes in GitHub and reference their Jira work items. Review applicability
 | Brief baseline evidence note | Section 4 minimum capture guidance and timestamped example |
 | Consistent team approach | Shared section order, incident timeline, ownership, review, and closure conventions |
 
-**Review boundary:** This ticket creates the runbook foundation. Team contacts, operational thresholds, and service-specific procedures must be completed and reviewed for the intended environment before operational adoption. The existence of this document does not demonstrate that a server incident has been investigated or resolved.
+### DEVOPS-010-C acceptance criteria
+
+| Ticket requirement | Coverage |
+| --- | --- |
+| Add a High CPU section | Section 13 |
+| Include top | Section 13.3 interactive inspection and Section 13.5 batch sampling |
+| Include ps aux --sort=-%cpu | Section 13.4 exact command and interpretation |
+| Identify the consuming process | Sections 13.3–13.4: PID, owner, command, service, and optional thread inspection |
+| Determine temporary or persistent load | Section 13.5: repeated intervals, monitoring baseline, and explicit limits on the conclusion |
+| Determine whether the application recently changed | Section 13.6: release/configuration/dependency timeline and deployed-version evidence |
+
+### DEVOPS-010-D acceptance criteria
+
+| Ticket requirement | Coverage |
+| --- | --- |
+| Add a High Memory section | Section 14 |
+| Include free -h | Section 14.2 timestamped baseline and Section 14.5 repeated capture |
+| Include ps aux --sort=-%mem | Section 14.4 exact command and process interpretation |
+| Interpret used and available memory | Section 14.3 definitions, version caveat, and examples |
+| Interpret cache | Section 14.3 reclaimable cache, overlap, and limits |
+| Interpret swap usage | Sections 14.3 and 14.5: allocated swap versus interval swap activity |
+
+**Review boundary:** The foundation and High CPU/Memory procedures require team contacts, operational thresholds, and environment validation before operational adoption. The existence of this document does not demonstrate that a server incident has been investigated or resolved.
 
 ## 13. High CPU troubleshooting
 
@@ -517,3 +549,234 @@ For this documentation ticket, review the procedure against these requirements; 
 - **[CPU-2]** [Ubuntu procps ps manual: process selection, sorting, and lifetime CPU](https://manpages.ubuntu.com/manpages/noble/man1/ps.1.html)
 - **[CPU-3]** [Linux kernel cgroup v2 CPU controller](https://www.kernel.org/doc/html/latest/admin-guide/cgroup-v2.html#cpu)
 - Local references for the inspected environment: `man top`, `man ps`, `man uptime`, `man nproc`, `man systemctl`, and `man journalctl`.
+
+## 14. High Memory troubleshooting
+
+### 14.1 Purpose, scope, and starting questions
+
+Investigate high memory usage by checking system headroom, identifying large resident processes, and correlating trends with workload and application changes. Determine whether the host or workload is under pressure rather than treating every occupied byte as a fault.
+
+Possible symptoms include a memory alert, slow requests, allocation failures, heavy swapping, or an out-of-memory (OOM) termination. Start by recording the affected host/application, actual impact, onset, alert threshold/duration, normal baseline, and recent changes.
+
+These examples assume Ubuntu/Linux, Bash, and procps `free`, `ps`, and `vmstat`. Run on the target server; Windows Git Bash does not report the remote server's memory. Collect observations without intentionally changing memory settings or service state. No stress-test workload is required for this documentation ticket.
+
+For containers or systemd services with memory limits, identify the workload's limit and accounting separately. Host-level free memory can coexist with a workload-specific OOM. Use platform metrics and the correct cgroup's usage, limit, and event counters; do not assume `free` represents container headroom. [MEM-4]
+
+### 14.2 Step 1 — Capture a timestamped baseline with free -h
+
+Initialize the evidence location in the same Bash session:
+
+```bash
+umask 077
+MEM_EVIDENCE_DIR="$HOME/devops-evidence/DEVOPS-010-D/$(date -u +'%Y%m%dT%H%M%SZ')-$$"
+mkdir -p "$MEM_EVIDENCE_DIR"
+MEM_EVIDENCE_FILE="$MEM_EVIDENCE_DIR/high-memory.log"
+touch "$MEM_EVIDENCE_FILE"
+
+{
+  date -u +'%Y-%m-%dT%H:%M:%SZ'
+  hostname
+  uptime
+  free --version
+  free -h
+  mem_free_rc=$?
+  printf 'free_exit_code=%s\n' "$mem_free_rc"
+  date -u +'%Y-%m-%dT%H:%M:%SZ'
+} 2>&1 | tee -a "$MEM_EVIDENCE_FILE"
+```
+
+Record both the `Mem:` and `Swap:` rows, including total, used, free, buff/cache, and available where shown. `-h` uses human-readable units; rounding may prevent displayed columns from adding up exactly. Keep units with the measurements. Stop relying on this log if file creation or `tee` fails, and use a verified alternate evidence route.
+
+### 14.3 Step 2 — Interpret used, available, cache, and swap
+
+| Field | Interpretation |
+| --- | --- |
+| Mem total | Usable physical memory reported by the kernel. |
+| Mem used | Version-dependent used/unavailable accounting. The referenced Ubuntu procps 4 manual uses `total - available`; older versions can calculate it differently. Check the installed `man free`. It is not a sum of application heaps. |
+| Mem free | RAM currently unused; excludes memory occupied by caches. Low free alone does not prove a shortage. |
+| Mem available | Estimate of headroom for new applications without swapping, accounting for reclaimable memory and kernel reserves. Prefer it to free alone when assessing host headroom. |
+| buff/cache | Buffers plus page cache and reclaimable slab accounting. Cache supports performance; it is not automatically wasted RAM. |
+| shared | Mostly tmpfs/shared-memory accounting; it can overlap other categories. Do not add it as an independent memory allocation. |
+| Swap total/used/free | Configured swap capacity, its current occupancy, and unused capacity. Swap occupancy does not show the current paging rate. |
+
+See the local version and the referenced definitions before comparing `used` values across hosts or tool upgrades. [MEM-1]
+
+The kernel can reclaim some cache under pressure, but not every cached/shared/dirty byte is immediately reusable. `available` is an estimate, not a guarantee that a particular large allocation will succeed. Do not calculate headroom by adding `available` to `buff/cache`; reclaimable cache is already considered in the estimate. If an application is limited by a cgroup, also check that limit. [MEM-2]
+
+Swap can retain inactive pages after earlier pressure has subsided. Nonzero swap usage with stable available memory and little current paging may reflect history. Sustained swap-in/out with low headroom and degraded response is more concerning. No configured swap is a deployment characteristic to record, not proof of a fault by itself.
+
+**Illustrative examples — these are not measurements from your server:**
+
+| Observation | Reasonable interpretation | Required follow-up |
+| --- | --- | --- |
+| Only 0.5 GiB free on a 16 GiB host, but about 10 GiB available and substantial cache | Low unused RAM with considerable estimated headroom; shortage is not established. | Check trends, workload limits, and client performance. |
+| Available memory remains around 0.3 GiB on that host, swap traffic is sustained, and requests slow down | Evidence consistent with memory pressure. | Identify consumers, compare workload/limits, and inspect OOM/application evidence. |
+| 1 GiB of swap remains used while available memory is stable and interval paging is near zero | Swap occupancy alone does not establish current pressure. | Review history and continue an appropriate observation window. |
+
+### 14.4 Step 3 — Identify resident consumers with ps
+
+Capture the exact command required by this ticket:
+
+```bash
+{
+  date -u +'%Y-%m-%dT%H:%M:%SZ'
+  ps aux --sort=-%mem
+  mem_ps_rc=$?
+  printf 'ps_exit_code=%s\n' "$mem_ps_rc"
+  date -u +'%Y-%m-%dT%H:%M:%SZ'
+} 2>&1 | tee -a "$MEM_EVIDENCE_FILE"
+```
+
+Review the first process rows after the header and record PID, user, `%MEM`, RSS, VSZ, start time, and command.
+
+| Process field | How to use it |
+| --- | --- |
+| %MEM | Resident set size as a percentage of reported physical RAM; not necessarily percentage of a container's limit. |
+| RSS | Resident, non-swapped process memory in the tool's kilobyte units. Use it to identify large resident consumers. |
+| VSZ | Virtual address space size; it is not physical RAM consumption and should not alone be called a leak. |
+| PID / USER / COMMAND | Identify the consumer, ownership, and expected application role. |
+
+Shared pages can appear in several processes' RSS, so summing RSS can double-count memory. Kernel memory and other accounting also prevent that sum from matching `free` exactly. If accurate shared attribution is needed, ask the application/platform owner for suitable proportional-set-size or workload accounting tools. Large RSS alone does not prove a memory leak. [MEM-3]
+
+Inspect an actual observed PID, after setting it below:
+
+```bash
+MEM_PID=''
+
+{
+  date -u +'%Y-%m-%dT%H:%M:%SZ'
+  ps -p "${MEM_PID:?Set the observed numeric PID}" \
+    -o pid,ppid,user,lstart,etime,pmem,rss,vsz,args
+  mem_detail_rc=$?
+  printf 'ps_detail_exit_code=%s\n' "$mem_detail_rc"
+  date -u +'%Y-%m-%dT%H:%M:%SZ'
+} 2>&1 | tee -a "$MEM_EVIDENCE_FILE"
+
+# Optional on a systemd host: identify the unit containing that PID.
+date -u +'%Y-%m-%dT%H:%M:%SZ'
+sudo systemctl status "${MEM_PID:?Set the observed numeric PID}" --no-pager --full
+```
+
+Correlate parent/service ownership and process start time. If the process has exited or the PID changes, record that and identify the current workload; do not silently substitute another process. Multiple small workers can matter collectively even when no single PID dominates.
+
+### 14.5 Step 4 — Observe trends and distinguish swap occupancy from activity
+
+Capture repeated measurements before deciding that an increase is persistent. This example records six observations separated by five-second sleeps, spanning roughly 25 seconds plus command time:
+
+```bash
+{
+  for mem_sample in {1..6}; do
+    printf '\nMemory sample %s\n' "$mem_sample"
+    date -u +'%Y-%m-%dT%H:%M:%SZ'
+    free -h
+    mem_sample_rc=$?
+    printf 'free_exit_code=%s\n' "$mem_sample_rc"
+    if (( mem_sample < 6 )); then
+      sleep 5
+    fi
+  done
+  date -u +'%Y-%m-%dT%H:%M:%SZ'
+} 2>&1 | tee -a "$MEM_EVIDENCE_DIR/memory-samples.log"
+```
+
+Repeat the process snapshot at meaningful points in the same window. Compare available RAM, cache, swap occupancy, and application RSS with normal workload behavior. Extend the window using the actual alert duration, batch-job length, and historical monitoring; a short sample cannot prove long-term stability or a leak.
+
+For interval swap activity, if `vmstat` is available:
+
+```bash
+{
+  date -u +'%Y-%m-%dT%H:%M:%SZ'
+  env TZ=UTC LC_ALL=C vmstat -w -t 5 7
+  mem_vmstat_rc=$?
+  printf 'vmstat_exit_code=%s\n' "$mem_vmstat_rc"
+  date -u +'%Y-%m-%dT%H:%M:%SZ'
+} 2>&1 | tee -a "$MEM_EVIDENCE_DIR/vmstat-intervals.log"
+```
+
+This requests seven reports about five seconds apart, covering roughly 30 seconds. The first report's rate fields are averages since boot; use subsequent rows for current interval rates. `swpd` is swap occupancy, `si` is swap-in rate, and `so` is swap-out rate. Check the installed manual for displayed units. Correlate repeated activity with available RAM, disk behavior, and application latency; one nonzero interval alone does not establish harmful thrashing. [MEM-5]
+
+If `vmstat` or relevant history is unavailable, record that limitation rather than assuming there is no paging. Even with no swap traffic, allocation failures or cgroup OOM can still occur.
+
+### 14.6 Step 5 — Investigate application changes, limits, and OOM evidence
+
+Check whether the increase matches a deployment, runtime/configuration change, new batch size, queue backlog, traffic growth, worker-count change, or cache warm-up. Record the actual deployed version and change time from delivery records; source commits alone do not prove what is running.
+
+Ask the application owner whether the observed heap/cache/pool size and growth pattern are expected. Continued growth under comparable workload is a reason for profiling, not proof by itself of a leak. Some runtimes retain allocated memory even after work completes.
+
+Where relevant, capture recent kernel events and the identified unit's memory accounting:
+
+```bash
+{
+  date -u +'%Y-%m-%dT%H:%M:%SZ'
+  sudo journalctl -k --since '30 minutes ago' \
+    --utc --no-pager -o short-iso-precise -n 200
+  mem_kernel_rc=$?
+  printf 'kernel_journal_exit_code=%s\n' "$mem_kernel_rc"
+  date -u +'%Y-%m-%dT%H:%M:%SZ'
+} 2>&1 | tee -a "$MEM_EVIDENCE_DIR/kernel-events.log"
+
+MEM_UNIT=''
+date -u +'%Y-%m-%dT%H:%M:%SZ'
+systemctl show "${MEM_UNIT:?Set the identified service unit}" \
+  --property=MemoryCurrent,MemoryHigh,MemoryMax,ControlGroup
+```
+
+Use a log range that covers the actual incident. Look for allocation/OOM messages and correlate their timestamps and victim with the service symptoms. A killed process need not be the original cause of pressure. Missing retained log entries or missing access do not prove no OOM occurred.
+
+For limited workloads, inspect the correct platform/cgroup usage, memory limit, and OOM counters. `MemoryMax` or container `memory.max` differs from total host RAM, and event counters are cumulative; compare changes over the incident window. A host-level `free -h` snapshot cannot exclude a workload-specific limit failure. [MEM-4]
+
+### 14.7 Step 6 — Interpret the evidence and select the next investigation
+
+| Combined evidence | Next action |
+| --- | --- |
+| Large cache, useful available memory, stable performance | Record current headroom and monitor; no shortage established from free RAM alone. |
+| Falling available memory with growing application RSS | Correlate workload/release/runtime behavior and involve the application owner. |
+| Low available memory, sustained paging, and latency/errors | Escalate pressure evidence to service/platform owners for targeted recovery. |
+| Host has headroom but the workload hits its memory limit or records OOM | Investigate the specific service/container limit and allocation behavior. |
+| Swap remains occupied but interval paging is low and performance is normal | Record history/trends; do not claim current thrashing from occupancy alone. |
+| No process explains the usage | Investigate shared memory, kernel/slab, cache, and workload accounting with the platform owner. |
+
+Do not drop caches, disable swap, kill the largest process, or reboot merely to reduce a number. Those actions can worsen performance, cause allocation failures, or erase useful state. If a corrective change is justified, document its impact, operational authority, rollback, and verification in the relevant remediation procedure.
+
+Use Section 8's escalation triggers for service impact, repeated OOM, rapid loss of headroom, unknown ownership, missing access, or unclear next actions. Do not wait for an observation window to finish during a serious outage.
+
+The checks here intentionally collect evidence without changing service configuration. They require no service rollback; optional profiling and actual remediation need their own documented procedure. Verify the application behavior as well as memory after any later correction, and retain a suitable observation window.
+
+### 14.8 Findings and completion record
+
+| Field | Actual finding |
+| --- | --- |
+| Host / workload / impact | `<confirmed details>` |
+| UTC onset and observation window | `<actual times; mark estimates>` |
+| Installed free version and baseline | `<version, normal behavior, alert threshold/duration>` |
+| Total / used / available / free RAM | `<values with units and interpretation>` |
+| Cache and shared-memory context | `<measurements and why they matter>` |
+| Swap occupancy and current activity | `<used/total plus interval si/so or unavailable>` |
+| Main PID(s), account, command, service | `<observed identity and ownership>` |
+| RSS / VSZ and trend | `<snapshots, units, and limits on attribution>` |
+| Workload memory limit and OOM evidence | `<platform/service scope and event timeline>` |
+| Recent changes / workload growth | `<records reviewed; confirmed/none found/unknown>` |
+| Assessment | `<no pressure established / suspected pressure / pressure supported; reasons>` |
+| Next owner / escalation / action | `<name/role, time, and agreed step>` |
+| Evidence references | `<protected logs or reviewed screenshots>` |
+
+For an actual investigation:
+
+- [ ] Captured `free -h` with a UTC timestamp and units.
+- [ ] Interpreted used and available memory using the installed tool's accounting.
+- [ ] Assessed cache without treating it all as wasted memory or double-counting available RAM.
+- [ ] Distinguished swap occupancy from current swap activity, or documented missing evidence.
+- [ ] Captured `ps aux --sort=-%mem` and identified candidate consumers.
+- [ ] Reviewed trends, application changes, service limits, and OOM evidence as applicable.
+- [ ] Recorded impact, uncertainties, and next action/escalation.
+
+This ticket supplies documentation, not a completed incident investigation. Keep raw evidence protected; command arguments and logs may contain sensitive information. Share reviewed/redacted copies through the team's normal incident/PR process.
+
+### 14.9 References
+
+- **[MEM-1]** [Ubuntu procps free manual](https://manpages.ubuntu.com/manpages/noble/man1/free.1.html)
+- **[MEM-2]** [Linux kernel proc filesystem: memory accounting and MemAvailable](https://www.kernel.org/doc/html/latest/filesystems/proc.html)
+- **[MEM-3]** [Ubuntu procps ps manual: memory fields and process snapshots](https://manpages.ubuntu.com/manpages/noble/man1/ps.1.html)
+- **[MEM-4]** [Linux kernel cgroup v2 memory controller and event accounting](https://www.kernel.org/doc/html/latest/admin-guide/cgroup-v2.html#memory)
+- **[MEM-5]** [Ubuntu procps vmstat manual: interval rates and swap activity](https://manpages.ubuntu.com/manpages/noble/man8/vmstat.8.html)
+- Local references: `man free`, `man ps`, `man vmstat`, `man systemctl`, and `man journalctl` for the inspected environment.
