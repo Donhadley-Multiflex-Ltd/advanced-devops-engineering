@@ -780,3 +780,218 @@ This ticket supplies documentation, not a completed incident investigation. Keep
 - **[MEM-4]** [Linux kernel cgroup v2 memory controller and event accounting](https://www.kernel.org/doc/html/latest/admin-guide/cgroup-v2.html#memory)
 - **[MEM-5]** [Ubuntu procps vmstat manual: interval rates and swap activity](https://manpages.ubuntu.com/manpages/noble/man8/vmstat.8.html)
 - Local references: `man free`, `man ps`, `man vmstat`, `man systemctl`, and `man journalctl` for the inspected environment.
+
+## 15. Disk Space Problems
+
+### 15.1 Purpose, scope, and safety rule
+
+Identify the affected filesystem, locate its largest space consumers, and establish what is growing before choosing a recovery action. Typical symptoms include a disk alert, a failed write with "No space left on device", failed log writes, or an application unable to create files.
+
+**Do not blindly delete files because they are large.** Confirm their purpose, owner, active use, retention requirements, and recovery implications. Database files, container volumes, backups, and active logs may be essential. This procedure provides diagnostic commands; deletion, truncation, pruning, and capacity changes require the appropriate service/storage procedure.
+
+Examples assume Ubuntu/Linux, Bash, and GNU `df`, `du`, `sort`, and `head`. Execute them on the affected server. Record the host, environment, affected application/path, UTC onset, user impact, and recent changes. If the actual full filesystem is elsewhere, investigate that path rather than assuming `/var` is responsible.
+
+Recursive scans generate filesystem I/O and may take time on large or busy trees. Start with the relevant scope, avoid repeated broad scans, and coordinate with the owner if diagnostics could worsen an incident.
+
+### 15.2 Step 1 — Identify the full filesystem with df -h
+
+Capture the initial state in the terminal before assuming a local evidence file can be created:
+
+```bash
+date -u +'%Y-%m-%dT%H:%M:%SZ'
+hostname
+df -h
+df -h /var
+df -i /var
+date -u +'%Y-%m-%dT%H:%M:%SZ'
+```
+
+| Column/check | Interpretation |
+| --- | --- |
+| Filesystem / Mounted on | Identify the device or filesystem and its mount point. |
+| Size / Used / Avail | Capacity, consumption, and space available to ordinary users. |
+| Use% | Filesystem usage ratio; compare with actual alert thresholds and growth. |
+| df -h /var | Shows the filesystem containing `/var`, which may be the root filesystem or a separate mount. |
+| df -i /var | Checks inode usage; exhausted inodes can prevent new files even when data-block capacity remains. |
+
+`df` measures filesystem usage, not the size of an individual directory. Use the affected application's actual write path to select the filesystem. Human-readable values are rounded; keep the units with measurements. [DISK-1]
+
+If logs or application data sit on a nested mount, check that exact path too. An apparently large directory on another filesystem may not explain the full one. Where available, `findmnt -T /var` helps identify mount context; inspect other affected paths similarly.
+
+After verifying that the evidence destination is writable and has capacity, initialize the capture location. Replace the destination with a verified alternate mount or use remote terminal capture if the default location is full:
+
+```bash
+umask 077
+DISK_EVIDENCE_DIR="$HOME/devops-evidence/DEVOPS-010-E/$(date -u +'%Y%m%dT%H%M%SZ')-$$"
+mkdir -p "$DISK_EVIDENCE_DIR"
+DISK_EVIDENCE_FILE="$DISK_EVIDENCE_DIR/disk-space.log"
+touch "$DISK_EVIDENCE_FILE"
+```
+
+Stop relying on local logging if creation or `tee` fails. Do not write large scan outputs or configuration backups onto the already exhausted filesystem.
+
+### 15.3 Step 2 — Locate large directories with du -sh /var/*
+
+Run the required summary command:
+
+```bash
+{
+  date -u +'%Y-%m-%dT%H:%M:%SZ'
+  du -sh /var/*
+  disk_du_rc=$?
+  printf 'du_exit_code=%s\n' "$disk_du_rc"
+  date -u +'%Y-%m-%dT%H:%M:%SZ'
+} 2>&1 | tee -a "$DISK_EVIDENCE_FILE"
+```
+
+`-s` produces one total for each expanded argument; `-h` uses human-readable sizes. Compare entries such as `/var/log`, `/var/lib`, `/var/cache`, and `/var/tmp`, then investigate the largest relevant one. These are allocated-space estimates, not a guarantee that deleting an entry will free that entire amount. [DISK-2]
+
+Permission errors make the measurement incomplete. Keep those errors in the evidence; with authorized access, rerun the same scope as `sudo du -sh /var/*`. Do not suppress errors to make a partial scan look successful.
+
+The shell's `/var/*` pattern normally omits dot-prefixed entries directly beneath `/var`, and this command can traverse nested filesystems. To include hidden children in a directory-level scan while staying on its starting filesystem, use:
+
+```bash
+date -u +'%Y-%m-%dT%H:%M:%SZ'
+sudo du -xhd1 /var
+```
+
+Drill down only into the confirmed large directory. For example, if `/var/log` is the consumer:
+
+```bash
+date -u +'%Y-%m-%dT%H:%M:%SZ'
+sudo du -xhd1 /var/log
+```
+
+Repeat at the relevant child path until the responsible application directory is identified. `-d1` limits displayed depth, not how far `du` must walk to calculate totals. `-x` avoids descending onto different filesystems; it is not a universal boundary for every bind mount or storage abstraction. Check the mount layout when interpreting results.
+
+### 15.4 Step 3 — Rank large entries with du, sort, and head
+
+Use the requested ranking pipeline when the scan scope and temporary-space capacity are appropriate:
+
+```bash
+{
+  date -u +'%Y-%m-%dT%H:%M:%SZ'
+  du -ah /var | sort -rh | head
+  disk_pipeline_rc=("${PIPESTATUS[@]}")
+  printf 'du_exit_code=%s sort_exit_code=%s head_exit_code=%s\n' \
+    "${disk_pipeline_rc[0]}" "${disk_pipeline_rc[1]}" "${disk_pipeline_rc[2]}"
+  date -u +'%Y-%m-%dT%H:%M:%SZ'
+} 2>&1 | tee -a "$DISK_EVIDENCE_FILE"
+```
+
+| Pipeline part | Purpose |
+| --- | --- |
+| du -ah /var | Lists allocated sizes for files and directory totals under `/var`. |
+| sort -rh | Orders human-readable sizes from largest to smallest. |
+| head | Shows the first ten output lines by default. |
+
+The result contains **both files and directories**. `/var` or a parent directory can appear above the file causing growth; these totals overlap, so do not add every displayed line together. Follow the large branch down to the relevant files. [DISK-2] [DISK-3] [DISK-4]
+
+**This is not a scan of only ten files.** `du` traverses the tree and `sort` processes its output before the largest entries can be selected. On a large tree, `sort` may need temporary disk space. Prefer the top-down investigation first. If sorting needs an alternate temporary directory, choose one on a verified filesystem with headroom and configure `sort -T <verified-directory>` before the scan; do not choose an arbitrary path on the full filesystem.
+
+Read the per-command exit codes and errors. `head` succeeding does not prove `du` had access to everything or `sort` completed correctly. A `sort` broken-pipe/SIGPIPE result can occur after `head` closes its input; distinguish that from traversal, temporary-space, or read errors. If permissions are insufficient, rerun with authorized `sudo` on `du`; keep the sort/head stages unprivileged unless there is a specific reason otherwise.
+
+For a smaller, filesystem-bounded investigation, adapt the pipeline to the confirmed directory, for example `sudo du -axh /var/log | sort -rh | head`. Review the same permission, overlap, and resource caveats.
+
+### 15.5 Step 4 — Confirm the consumer and explain discrepancies
+
+Record the full path, allocated size, owning application, last modification context, and whether the object is active. For a specific observed path, inspect metadata without changing it:
+
+```bash
+DISK_PATH=''
+date -u +'%Y-%m-%dT%H:%M:%SZ'
+sudo stat -- "${DISK_PATH:?Set the actual large file or directory path}"
+df -h "$DISK_PATH"
+```
+
+An OS owner account is not necessarily the business/service owner. Correlate the path with application configuration, service logs, container/storage inventory, or the responsible team. Repeat a focused measurement after a suitable interval to determine whether it is still growing; size alone does not identify the cause.
+
+| Finding | Investigation |
+| --- | --- |
+| Large /var/log subtree | Identify the producing service, growth rate, rotation/retention, and whether verbose logging or repeated errors began recently. |
+| Large /var/lib subtree | Determine whether it contains database data, images, layers, or persistent volumes; use the owning product's accounting tools. |
+| Large /var/cache subtree | Confirm the cache owner, whether data is regenerable, and its supported retention/cleanup policy. |
+| Many small files with full inode usage | Locate the producing directory/job; large-file rankings alone will not explain inode exhaustion. |
+| df shows more usage than reachable du totals | Check inaccessible paths, deleted-open files, mount scope, filesystem accounting, snapshots, or reserved space with the storage owner. |
+| Write fails despite apparent headroom | Check the exact write path, applicable quota/limit, inode state, read-only condition, and application error; do not assume block exhaustion. |
+
+If deleted-open files are suspected and `lsof` is installed:
+
+```bash
+date -u +'%Y-%m-%dT%H:%M:%SZ'
+sudo lsof +L1
+```
+
+`+L1` lists open files with no remaining directory link. Such files can keep allocated space until their open references are released, so they may appear in `df` usage without a reachable pathname for `du`. Record the device/filesystem, PID, command, file identity, and size. Multiple descriptors can reference the same file; do not blindly sum rows. [DISK-5]
+
+Coordinate any log reopen or controlled service action with the owner; do not kill the PID to reclaim space without understanding its role. If `lsof` is unavailable or permission-limited, record the limitation and escalate. Do not reboot solely to clear the discrepancy.
+
+### 15.6 Step 5 — Plan safe remediation rather than blind deletion
+
+Before changing a consumer, establish:
+
+1. What the file/directory is and which service needs it.
+2. Whether it is actively written, open, or referenced by a managed storage system.
+3. Which retention, backup, audit, and recovery requirements apply.
+4. The targeted supported action, its expected benefit, and its impact.
+5. The known-good state or recovery plan, including anything irreversible.
+
+Examples of appropriate **conditional plans**, not instructions to execute automatically:
+
+| Confirmed cause | Plan with the owner |
+| --- | --- |
+| Unbounded application logging | Correct the writer/verbosity and use reviewed log rotation/retention while preserving incident evidence. |
+| Expendable package/application cache | Use the owner's supported cleanup method after checking regeneration/offline requirements. |
+| Container image or volume growth | Use the container platform's inventory and supported cleanup; distinguish unused images from required persistent data. |
+| Legitimate data growth | Review retention, archive strategy, or capacity expansion. |
+| Deleted-open log | Use the service's supported reopen/rotation procedure; consider a controlled restart only when justified. |
+
+Do not manually remove database internals, `/var/lib` contents, active logs, or container volumes to reduce a usage number. Moving data elsewhere on the same filesystem generally does not recover its capacity. A backup made on that filesystem consumes additional space. Some deletion/cleanup actions cannot be undone without an independent retained copy.
+
+### 15.7 Step 6 — Verify the outcome and escalate
+
+After any separately authorized corrective action, repeat `df -h` for the affected path and `df -i` where relevant. Recheck the targeted consumer/growth rate, fresh application errors, and the original failing write or service request using its normal validation procedure. Do not create arbitrary large test files on an already full filesystem.
+
+Record before/after available capacity, inode usage, action/time, and a suitable observation window. A brief reduction is incomplete recovery if the original writer immediately fills the filesystem again.
+
+Use Section 8 escalation guidance for production impact, rapidly falling headroom, unknown data ownership, database/persistent storage, permission limitations, filesystem errors, or any action whose impact/recovery is unclear. A percentage alone is not a universal emergency threshold; use the service's alert policy, available capacity, growth rate, and actual impact.
+
+These diagnostic checks do not intentionally change application configuration or delete application data. They require no service rollback themselves. Actual cleanup, log rotation, service actions, and capacity changes need their own recovery plan and validation.
+
+### 15.8 Findings and completion record
+
+| Field | Actual finding |
+| --- | --- |
+| Host / service / environment / impact | `<confirmed details>` |
+| UTC onset and observation window | `<actual timestamps; mark estimates>` |
+| Affected write path and filesystem/mount | `<exact path/device/context>` |
+| df baseline / inode baseline | `<size, used, available, use%, inode values>` |
+| Largest relevant directories/files | `<paths, allocated sizes, ownership>` |
+| Scan scope and limitations | `<mount boundaries, hidden entries, permission errors, command exit codes>` |
+| Deleted-open files / discrepancy | `<evidence or unresolved limitation>` |
+| Growth and recent changes | `<focused repeated measurements and supporting records>` |
+| Targeted plan and recovery implications | `<owner, action, retained evidence, irreversible steps>` |
+| After-action verification, if performed | `<actual measurements and original symptom result>` |
+| Escalation / next owner / follow-up | `<name/role, time, agreed next step>` |
+| Evidence | `<protected captures or reviewed screenshots>` |
+
+For an actual investigation:
+
+- [ ] Used `df -h` to identify the affected filesystem.
+- [ ] Checked inodes when relevant to the reported failure.
+- [ ] Used `du -sh /var/*` and recorded permission/mount limitations.
+- [ ] Used or assessed the suitability of `du -ah /var | sort -rh | head`; recorded any narrower equivalent and reason.
+- [ ] Located the largest relevant consumers without double-counting parent totals.
+- [ ] Confirmed ownership and purpose before proposing any deletion.
+- [ ] Recorded growth, uncertainty, safe next action, and escalation where needed.
+
+This documentation ticket includes command examples, not proof that a production disk was scanned or repaired. Keep raw paths/output protected and share reviewed evidence through the normal incident process.
+
+### 15.9 References
+
+- **[DISK-1]** [Ubuntu/GNU df manual](https://manpages.ubuntu.com/manpages/noble/man1/df.1.html)
+- **[DISK-2]** [Ubuntu/GNU du manual](https://manpages.ubuntu.com/manpages/noble/man1/du.1.html)
+- **[DISK-3]** [Ubuntu/GNU sort manual](https://manpages.ubuntu.com/manpages/noble/man1/sort.1.html)
+- **[DISK-4]** [Ubuntu/GNU head manual](https://manpages.ubuntu.com/manpages/noble/man1/head.1.html)
+- **[DISK-5]** [Ubuntu lsof manual: unlinked open files](https://manpages.ubuntu.com/manpages/noble/man8/lsof.8.html)
+- Local references for the inspected environment: `man df`, `man du`, `man sort`, `man head`, `man stat`, `man findmnt`, and `man lsof` where installed.
