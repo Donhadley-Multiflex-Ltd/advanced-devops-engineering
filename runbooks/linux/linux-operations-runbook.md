@@ -1431,3 +1431,4 @@ This ticket documents the procedure. Example identities, paths, and listings are
 - **[PERM-6]** [Ubuntu getfacl manual](https://manpages.ubuntu.com/manpages/noble/man1/getfacl.1.html)
 - Local references: `man ls`, `man namei`, `man id`, `man acl`, `man getfacl`, and service/security/filesystem documentation for the inspected environment.
 
+
